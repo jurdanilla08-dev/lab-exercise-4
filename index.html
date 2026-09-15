@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Role-Based Asset Transaction & Approval System</title>
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Supabase JS Client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { background-color: #f8f9fa; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    .navbar-brand { font-weight: bold; letter-spacing: 0.5px; }
+    .card { border-radius: 8px; border: 1px solid #de57571a; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .badge-pending { background-color: #ffc107; color: #000; }
+    .badge-approved { background-color: #0d6efd; }
+    .badge-rejected { background-color: #dc3545; }
+    .badge-released { background-color: #fd7e14; }
+    .badge-returned { background-color: #198754; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation Bar (Adapts to Logged-in Role) -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <div class="container-fluid">
+      <a class="navbar-brand ms-2" href="#">Asset Approval System</a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="navbarNav">
+        <ul class="navbar-menu navbar-nav me-auto mb-2 mb-lg-0" id="nav-links">
+          <li class="nav-item"><a class="nav-link active" href="#" onclick="showTab('equipment-tab')">Equipment Catalog</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" onclick="showTab('requests-tab')">Borrowing Requests</a></li>
+          <!-- Admin Only Nav Item -->
+          <li class="nav-item hidden" id="nav-audit"><a class="nav-link" href="#" onclick="showTab('audit-tab')">Audit Logs</a></li>
+        </ul>
+        <div class="d-flex align-items-center me-3 text-white">
+          <span id="user-role-badge" class="badge bg-secondary me-3">Not Logged In</span>
+          <button id="auth-btn" class="btn btn-outline-light btn-sm" onclick="handleAuth()">Login</button>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container my-4">
+
+    <!-- Auth Modal / Card -->
+    <div id="auth-card" class="card mx-auto p-4 mb-4" style="max-width: 400px;">
+      <h4 class="card-title text-center mb-3">System Login</h4>
+      <div class="mb-3">
+        <label for="email" class="form-label">Email</label>
+        <input type="email" id="email" class="form-control" placeholder="user@lab.com">
+      </div>
+      <div class="mb-3">
+        <label for="password" class="form-label">Password</label>
+        <input type="password" id="password" class="form-control" placeholder="••••••••">
+      </div>
+      <button class="btn btn-primary w-100" onclick="login()">Sign In</button>
+      <div id="auth-error" class="text-danger mt-2 text-center small"></div>
+    </div>
+
+    <!-- Main Dashboard Body (Hidden until authenticated) -->
+    <div id="dashboard-content" class="hidden">
+
+      <!-- Tab 1: Equipment Catalog -->
+      <div id="equipment-tab" class="tab-content">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h3>Equipment Inventory</h3>
+          <span class="text-muted small">BR-A4-01 & BR-A4-09: Available assets only</span>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-hover bg-white rounded">
+            <thead class="table-dark">
+              <tr>
+                <th>Asset Code</th>
+                <th>Equipment Name</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="equipment-list"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Tab 2: Borrowing Transactions & Workflow -->
+      <div id="requests-tab" class="tab-content hidden">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h3>Borrowing Requests & Approvals</h3>
+          <span class="text-muted small">BR-A4-02 to BR-A4-08 Workflow Engine</span>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-hover bg-white rounded">
+            <thead class="table-dark">
+              <tr>
+                <th>Request ID</th>
+                <th>Equipment</th>
+                <th>Requester</th>
+                <th>Status</th>
+                <th>Date</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="requests-list"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Tab 3: Admin Audit Logs (Administrator Only) -->
+      <div id="audit-tab" class="tab-content hidden">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h3>System Audit Trail</h3>
+          <span class="text-muted small">BR-A4-10: Traceable operations log</span>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-striped bg-white rounded">
+            <thead class="table-dark">
+              <tr>
+                <th>Timestamp</th>
+                <th>User ID</th>
+                <th>Action</th>
+                <th>Module</th>
+                <th>Record ID</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody id="audit-list"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // 1. SUPABASE INITIALIZATION
+    const SUPABASE_URL = "YOUR_SUPABASE_URL";
+    const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+    const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let currentUser = null;
+    let currentRole = 'Requester / Viewer';
+
+    // 2. AUTHENTICATION & ROLE LOADING
+    async function login() {
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      
+      if (error) {
+        document.getElementById('auth-error').innerText = error.message;
+      } else {
+        document.getElementById('auth-error').innerText = '';
+        initDashboard();
+      }
+    }
+
+    async function handleAuth() {
+      if (currentUser) {
+        await supabase.auth.signOut();
+        location.reload();
+      }
+    }
+
+    async function initDashboard() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      currentUser = user;
+      document.getElementById('auth-card').classList.add('hidden');
+      document.getElementById('dashboard-content').classList.remove('hidden');
+      document.getElementById('auth-btn').innerText = 'Logout';
+
+      // Fetch User Role from Profiles Table
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (profile) currentRole = profile.role;
+      
+      // Update UI with Active Role Badge & Navigation Access
+      const badge = document.getElementById('user-role-badge');
+      badge.innerText = currentRole;
+      badge.className = `badge me-3 ${currentRole === 'Administrator' ? 'bg-danger' : currentRole === 'Laboratory Staff' ? 'bg-warning text-dark' : 'bg-info text-dark'}`;
+
+      // Enforce Interface Navigation Adaptation (BR-A4-10 / Interface Requirements)
+      if (currentRole === 'Administrator') {
+        document.getElementById('nav-audit').classList.remove('hidden');
+      }
+
+      loadEquipment();
+      loadRequests();
+      if (currentRole === 'Administrator') loadAuditLogs();
+    }
+
+    // 3. EQUIPMENT CATALOG & BORROW REQUEST (BR-A4-01, BR-A4-09)
+    async function loadEquipment() {
+      const { data: items } = await supabase.from('equipment').select('*');
+      const list = document.getElementById('equipment-list');
+      list.innerHTML = '';
+
+      items.forEach(item => {
+        const canRequest = item.status === 'Available';
+        list.innerHTML += `
+          <tr>
+            <td><code>${item.asset_code}</code></td>
+            <td>${item.equipment_name}</td>
+            <td><span class="badge ${item.status === 'Available' ? 'bg-success' : item.status === 'Borrowed' ? 'bg-primary' : 'bg-danger'}">${item.status}</span></td>
+            <td>
+              <button class="btn btn-sm btn-outline-primary" ${!canRequest ? 'disabled' : ''} onclick="submitRequest('${item.id}')">
+                ${canRequest ? 'Request Borrow' : 'Unavailable'}
+              </button>
+            </td>
+          </tr>
+        `;
+      });
+    }
+
+    async function submitRequest(equipmentId) {
+      const { error } = await supabase.from('borrowing_requests').insert([
+        { equipment_id: equipmentId, requester_id: currentUser.id, status: 'Pending' }
+      ]);
+
+      if (error) alert('Error submitting request: ' + error.message);
+      else {
+        alert('Borrowing request submitted as Pending!');
+        loadRequests();
+      }
+    }
+
+    // 4. WORKFLOW ENGINE (BR-A4-02 to BR-A4-08)
+    async function loadRequests() {
+      const { data: requests } = await supabase.from('borrowing_requests').select('*, equipment(equipment_name), profiles!requester_id(full_name)');
+      const list = document.getElementById('requests-list');
+      list.innerHTML = '';
+
+      requests.forEach(req => {
+        let actionButtons = '';
+
+        // Administrator Actions: Approve or Reject (BR-A4-03)
+        if (currentRole === 'Administrator' && req.status === 'Pending') {
+          actionButtons += `
+            <button class="btn btn-sm btn-success me-1" onclick="updateStatus('${req.id}', 'Approved')">Approve</button>
+            <button class="btn btn-sm btn-danger me-1" onclick="updateStatus('${req.id}', 'Rejected')">Reject</button>
+          `;
+        }
+
+        // Staff / Admin Actions: Release Approved or Process Return (BR-A4-04, BR-A4-06)
+        if ((currentRole === 'Laboratory Staff' || currentRole === 'Administrator')) {
+          if (req.status === 'Approved') {
+            actionButtons += `<button class="btn btn-sm btn-warning" onclick="updateStatus('${req.id}', 'Released')">Release Asset</button>`;
+          } else if (req.status === 'Released') {
+            actionButtons += `<button class="btn btn-sm btn-info" onclick="updateStatus('${req.id}', 'Returned')">Process Return</button>`;
+          }
+        }
+
+        list.innerHTML += `
+          <tr>
+            <td><small><code>${req.id.substring(0,8)}...</code></small></td>
+            <td>${req.equipment ? req.equipment.equipment_name : 'Asset'}</td>
+            <td>${req.profiles ? req.profiles.full_name : 'User'}</td>
+            <td><span class="badge badge-${req.status.toLowerCase()}">${req.status}</span></td>
+            <td>${new Date(req.request_date).toLocaleDateString()}</td>
+            <td>${actionButtons || '<span class="text-muted small">No actions</span>'}</td>
+          </tr>
+        `;
+      });
+    }
+
+    async function updateStatus(requestId, newStatus) {
+      const { error } = await supabase
+        .from('borrowing_requests')
+        .update({ status: newStatus })
+        .eq('id', requestId);
+
+      if (error) alert('Workflow Error: ' + error.message);
+      else {
+        loadRequests();
+        loadEquipment();
+        if (currentRole === 'Administrator') loadAuditLogs();
+      }
+    }
+
+    // 5. AUDIT LOGS DISPLAY (BR-A4-10)
+    async function loadAuditLogs() {
+      const { data: logs } = await supabase.from('audit_logs').select('*').order('created_at', { ascending: false });
+      const list = document.getElementById('audit-list');
+      list.innerHTML = '';
+
+      logs.forEach(log => {
+        list.innerHTML += `
+          <tr>
+            <td><small>${new Date(log.created_at).toLocaleString()}</small></td>
+            <td><small><code>${log.user_id ? log.user_id.substring(0,8) : 'System'}</code></small></td>
+            <td><span class="badge bg-secondary">${log.action}</span></td>
+            <td>${log.module}</td>
+            <td><code>${log.record_id.substring(0,8)}</code></td>
+            <td>${log.description}</td>
+          </tr>
+        `;
+      });
+    }
+
+    // TAB NAVIGATION GUARD (TC-A4-01)
+    function showTab(tabId) {
+      if (tabId === 'audit-tab' && currentRole !== 'Administrator') {
+        alert('Access Denied: Only Administrators can view Audit Logs!');
+        return;
+      }
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
+      document.getElementById(tabId).classList.remove('hidden');
+    }
+
+    // CHECK ACTIVE SESSION ON LOAD
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) initDashboard();
+    });
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
